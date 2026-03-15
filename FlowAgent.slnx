@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/examples/">
+    <Project Path="examples/FlowAgent.Examples/FlowAgent.Examples.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/FlowAgent.Core/FlowAgent.Core.csproj" />
+  </Folder>
+</Solution>
