@@ -282,6 +282,7 @@ await agent.ExecuteToolAsync("sqlite_database",
 - ✅ 工具链式调用优化（支持并行工具执行）
 - ✅ 多智能体协作（AgentOrchestrator + SubAgentTool）
 - ✅ 错误处理和重试机制（指数退避重试策略）
+- ✅ **插件化工具系统**（`PluginManager`：自动发现、热加载/卸载、工具启用/禁用，无需重启）
 
 ## 下一步计划
 
@@ -334,6 +335,76 @@ var config = new AgentConfig
     LlmMaxRetries = 3,      // 最多重试 3 次
     LlmRetryDelayMs = 1000  // 首次重试等待 1 秒（指数退避）
 };
+```
+
+### 🔌 插件化工具系统
+
+工具现在支持以**插件 DLL** 形式动态加载，无需重启即可热插拔，并可随时启用/禁用任意工具。
+
+#### 创建插件
+
+新建一个 `.NET` 类库项目，引用 `FlowAgent.Core` 并实现 `ITool`：
+
+```csharp
+// MyPlugin/MyTool.cs
+public class MyTool : ITool
+{
+    public string Name => "my_tool";
+    public string Description => "我的自定义工具";
+    public string ParametersSchema => @"{ ""type"": ""object"", ""properties"": {} }";
+    public Task<string> ExecuteAsync(string arguments, CancellationToken cancellationToken = default)
+        => Task.FromResult("执行结果");
+}
+```
+
+编译后将 `MyPlugin.dll` 放入插件目录即可自动加载，无需修改主程序。
+
+#### 使用 PluginManager
+
+```csharp
+using FlowAgent.Core.Plugins;
+
+// 创建插件管理器，监视 ./plugins 目录
+var pluginManager = new PluginManager("./plugins");
+
+// 发现工具时自动注册到智能体
+pluginManager.ToolDiscovered += (info, tool) => agent.RegisterTool(tool);
+// 插件卸载时自动注销工具
+pluginManager.ToolRemoved    += (info, tool) => agent.UnregisterTool(tool.Name);
+
+// 启动：扫描已有插件并开始监视目录（无阻塞）
+await pluginManager.StartAsync();
+
+// 将 MyPlugin.dll 放入 ./plugins —— 自动热加载，无需重启 ✨
+```
+
+#### 运行时启用 / 禁用工具
+
+```csharp
+// 禁用工具（工具仍注册，但不传递给 LLM）
+agent.DisableTool("calculator");
+
+// 重新启用工具
+agent.EnableTool("calculator");
+
+// 彻底注销工具
+agent.UnregisterTool("calculator");
+
+// 查看当前激活的工具列表
+var active = agent.GetActiveTools();
+```
+
+#### 手动加载 / 卸载插件
+
+```csharp
+// 手动加载指定 DLL
+await pluginManager.LoadPluginAsync("/path/to/MyPlugin.dll");
+
+// 卸载（触发 ToolRemoved 事件，自动注销工具）
+pluginManager.UnloadPlugin("/path/to/MyPlugin.dll");
+
+// 热替换：先卸载旧版本，再加载新版本
+await pluginManager.ReloadPluginAsync("/path/to/MyPlugin.dll");
 ```
 
 创建自己的工具非常简单：

@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/examples/">
     <Project Path="examples/FlowAgent.Examples/FlowAgent.Examples.csproj" />
+    <Project Path="examples/FlowAgent.SamplePlugin/FlowAgent.SamplePlugin.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/FlowAgent.Core/FlowAgent.Core.csproj" />

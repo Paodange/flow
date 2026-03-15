@@ -2,6 +2,7 @@ using FlowAgent.Core;
 using FlowAgent.Core.Configuration;
 using FlowAgent.Core.LLM;
 using FlowAgent.Core.Models;
+using FlowAgent.Core.Plugins;
 using FlowAgent.Core.Tools;
 
 namespace FlowAgent.Examples;
@@ -840,5 +841,147 @@ class Program
             Console.WriteLine("─".PadRight(60, '─'));
             Console.WriteLine();
         }
+    }
+
+    /// <summary>
+    /// 示例8: 演示插件系统 - 自动发现、热加载和工具启用/禁用
+    /// </summary>
+    static async Task Example8_PluginSystem()
+    {
+        PrintSectionTitle("示例8: 插件系统 - 自动发现与热加载");
+
+        // 创建临时插件目录
+        var pluginDir = Path.Combine(Path.GetTempPath(), "flowagent_plugins_demo");
+        Directory.CreateDirectory(pluginDir);
+
+        Console.WriteLine($"📁 插件目录: {pluginDir}");
+        Console.WriteLine();
+
+        // 创建智能体
+        var config = new AgentConfig
+        {
+            Name = "插件演示助手",
+            SystemPrompt = "你是一个演示插件系统的助手。"
+        };
+        var agent = new Agent(config);
+
+        // ── 1. 使用 PluginManager 自动发现插件 ──────────────────────────────
+        Console.WriteLine("📝 步骤1: 启动插件管理器（自动发现插件）");
+
+        using var pluginManager = new PluginManager(pluginDir);
+
+        // 订阅事件：插件发现工具时自动注册到 Agent
+        pluginManager.ToolDiscovered += (pluginInfo, tool) =>
+        {
+            try
+            {
+                agent.RegisterTool(tool);
+                Console.WriteLine($"   🔌 自动注册工具来自插件: {Path.GetFileName(pluginInfo.FilePath)}");
+            }
+            catch (InvalidOperationException ex)
+            {
+                Console.WriteLine($"   ⚠️  {ex.Message}");
+            }
+        };
+
+        // 订阅事件：插件卸载时自动注销工具
+        pluginManager.ToolRemoved += (pluginInfo, tool) =>
+        {
+            agent.UnregisterTool(tool.Name);
+            Console.WriteLine($"   🔌 自动注销工具来自插件: {Path.GetFileName(pluginInfo.FilePath)}");
+        };
+
+        // 记录加载失败
+        pluginManager.PluginLoadFailed += (filePath, ex) =>
+        {
+            Console.WriteLine($"   ❌ 插件加载失败 {Path.GetFileName(filePath)}: {ex.Message}");
+        };
+
+        await pluginManager.StartAsync();
+        Console.WriteLine($"   当前已加载插件数: {pluginManager.LoadedPlugins.Count}");
+        Console.WriteLine();
+
+        // ── 2. 手动注册内置工具（演示工具启用/禁用） ────────────────────────
+        Console.WriteLine("📝 步骤2: 注册内置工具");
+        agent.RegisterTool(new CalculatorTool());
+        agent.RegisterTool(new DateTimeTool());
+        agent.RegisterTool(new TextProcessTool());
+        Console.WriteLine();
+
+        Console.WriteLine($"   当前已注册工具: {string.Join(", ", agent.Tools.Keys)}");
+        Console.WriteLine($"   当前激活工具:   {string.Join(", ", agent.GetActiveTools().Keys)}");
+        Console.WriteLine();
+
+        // ── 3. 演示工具禁用/启用 ─────────────────────────────────────────────
+        Console.WriteLine("📝 步骤3: 禁用 text_process 工具");
+        agent.DisableTool("text_process");
+        Console.WriteLine($"   当前激活工具: {string.Join(", ", agent.GetActiveTools().Keys)}");
+        Console.WriteLine();
+
+        Console.WriteLine("📝 步骤4: 重新启用 text_process 工具");
+        agent.EnableTool("text_process");
+        Console.WriteLine($"   当前激活工具: {string.Join(", ", agent.GetActiveTools().Keys)}");
+        Console.WriteLine();
+
+        // ── 4. 演示工具注销 ──────────────────────────────────────────────────
+        Console.WriteLine("📝 步骤5: 注销 random 工具（若已注册）");
+        agent.UnregisterTool("random");    // 静默忽略未注册的工具
+        Console.WriteLine($"   当前已注册工具: {string.Join(", ", agent.Tools.Keys)}");
+        Console.WriteLine();
+
+        // ── 5. 演示热加载：将插件 DLL 复制到监视目录 ───────────────────────
+        Console.WriteLine("📝 步骤6: 演示热加载 - 将示例插件复制到插件目录");
+
+        // 找到 SamplePlugin DLL（在构建输出中）
+        var samplePluginPath = FindSamplePluginDll();
+        if (samplePluginPath != null)
+        {
+            var destPath = Path.Combine(pluginDir, Path.GetFileName(samplePluginPath));
+            File.Copy(samplePluginPath, destPath, overwrite: true);
+            Console.WriteLine($"   📋 已复制插件: {Path.GetFileName(destPath)}");
+
+            // 等待 FileSystemWatcher 触发并加载插件
+            await Task.Delay(1500);
+
+            Console.WriteLine($"   当前已注册工具: {string.Join(", ", agent.Tools.Keys)}");
+        }
+        else
+        {
+            Console.WriteLine("   ℹ️  未找到 SamplePlugin DLL，跳过热加载演示");
+            Console.WriteLine("      （请先编译 FlowAgent.SamplePlugin 项目）");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("📊 最终状态:");
+        Console.WriteLine($"   已加载插件数: {pluginManager.LoadedPlugins.Count}");
+        Console.WriteLine($"   已注册工具数: {agent.Tools.Count}");
+        Console.WriteLine($"   激活工具数:   {agent.GetActiveTools().Count}");
+        Console.WriteLine($"\n{agent.GetHistorySummary()}");
+
+        // 清理临时目录
+        try { Directory.Delete(pluginDir, recursive: true); }
+        catch { /* 忽略清理失败 */ }
+    }
+
+    /// <summary>查找 SamplePlugin 的构建输出 DLL</summary>
+    private static string? FindSamplePluginDll()
+    {
+        var baseDir = AppContext.BaseDirectory;
+        // 向上找到仓库根目录
+        var dir = new DirectoryInfo(baseDir);
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "FlowAgent.slnx")))
+        {
+            dir = dir.Parent;
+        }
+
+        if (dir == null) return null;
+
+        var pattern = Path.Combine(dir.FullName, "examples", "FlowAgent.SamplePlugin", "bin", "**", "FlowAgent.SamplePlugin.dll");
+        var matches = Directory.GetFiles(
+            Path.Combine(dir.FullName, "examples", "FlowAgent.SamplePlugin", "bin"),
+            "FlowAgent.SamplePlugin.dll",
+            SearchOption.AllDirectories);
+
+        return matches.FirstOrDefault();
     }
 }

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- 生成 DLL 时不包含运行时，便于作为独立插件部署 -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <!-- 插件名称 -->
+    <AssemblyName>FlowAgent.SamplePlugin</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 引用 Core 以实现 ITool 接口，但不捆绑其 DLL（运行时由宿主提供） -->
+    <ProjectReference Include="..\..\src\FlowAgent.Core\FlowAgent.Core.csproj">
+      <Private>false</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </ProjectReference>
+  </ItemGroup>
+
+</Project>
