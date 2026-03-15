@@ -26,9 +26,11 @@ flow/
 │       │   ├── DateTimeTool.cs   # 日期时间工具
 │       │   ├── TextProcessTool.cs# 文本处理工具
 │       │   ├── RandomTool.cs     # 随机工具
-│       │   ├── FileOperationTool.cs # 文件操作工具
+│       │   ├── FileOperationTool.cs # 文件操作工具（读/写/删除/复制/移动/目录管理）
 │       │   ├── WebRequestTool.cs    # 网络请求工具
-│       │   └── DatabaseQueryTool.cs # 内存数据库工具
+│       │   ├── WebSearchTool.cs     # 网页搜索工具（DuckDuckGo）
+│       │   ├── DatabaseQueryTool.cs # 内存数据库工具
+│       │   └── SqliteDatabaseTool.cs# SQLite 数据库工具（持久化）
 │       ├── LLM/                  # LLM 集成
 │       │   ├── ILlmClient.cs     # LLM 客户端接口（含流式）
 │       │   ├── LlmResponse.cs    # LLM 响应模型
@@ -174,13 +176,25 @@ await agent.ExecuteToolAsync("random",
 ```
 
 ### 📁 FileOperationTool（文件操作）
-读取、写入、追加、删除文件，列出目录内容
+读取、写入、追加、删除文件，创建目录，移动/复制文件，获取文件信息
 
 ```csharp
 // 构造时可指定根目录（防止目录遍历）
 var fileTool = new FileOperationTool("/safe/base/dir");
 await agent.ExecuteToolAsync("file_operation",
     @"{""operation"": ""write"", ""path"": ""output.txt"", ""content"": ""Hello!""}");
+// 创建目录
+await agent.ExecuteToolAsync("file_operation",
+    @"{""operation"": ""mkdir"", ""path"": ""logs""}");
+// 复制文件
+await agent.ExecuteToolAsync("file_operation",
+    @"{""operation"": ""copy"", ""path"": ""output.txt"", ""destination"": ""backup/output.txt""}");
+// 移动/重命名文件
+await agent.ExecuteToolAsync("file_operation",
+    @"{""operation"": ""move"", ""path"": ""output.txt"", ""destination"": ""archive/output.txt""}");
+// 获取文件信息
+await agent.ExecuteToolAsync("file_operation",
+    @"{""operation"": ""info"", ""path"": ""output.txt""}");
 ```
 
 ### 🌐 WebRequestTool（网络请求）
@@ -189,6 +203,15 @@ await agent.ExecuteToolAsync("file_operation",
 ```csharp
 await agent.ExecuteToolAsync("web_request",
     @"{""url"": ""https://api.example.com/data"", ""method"": ""GET""}");
+```
+
+### 🔍 WebSearchTool（网页搜索）
+使用 DuckDuckGo 搜索网络内容，返回摘要、直接答案和相关链接
+
+```csharp
+var searchTool = new WebSearchTool();
+await agent.ExecuteToolAsync("web_search",
+    @"{""query"": "".NET 10 新特性"", ""max_results"": 5}");
 ```
 
 ### 🗄️ DatabaseQueryTool（内存数据库）
@@ -206,6 +229,35 @@ await agent.ExecuteToolAsync("database_query",
     @"{""operation"": ""select"", ""table"": ""users"", ""where"": {""age"": ""28""}}");
 ```
 
+### 🗃️ SqliteDatabaseTool（SQLite 数据库）
+持久化 SQLite 数据库：完整 CRUD 操作（含 UPDATE）和自定义 SQL 语句
+
+```csharp
+// 使用文件数据库（持久化）
+var dbTool = new SqliteDatabaseTool("mydata.db");
+// 或使用内存数据库（不持久化）
+var dbTool = new SqliteDatabaseTool();
+
+// 创建表（支持完整的列类型定义）
+await agent.ExecuteToolAsync("sqlite_database",
+    @"{""operation"": ""create_table"", ""table"": ""users"",
+      ""columns"": [{""name"": ""id"", ""type"": ""INTEGER PRIMARY KEY AUTOINCREMENT""},
+                   {""name"": ""name"", ""type"": ""TEXT""},
+                   {""name"": ""age"", ""type"": ""INTEGER""}]}");
+// 插入
+await agent.ExecuteToolAsync("sqlite_database",
+    @"{""operation"": ""insert"", ""table"": ""users"", ""row"": {""name"": ""张三"", ""age"": ""28""}}");
+// 查询（支持 where 和 limit）
+await agent.ExecuteToolAsync("sqlite_database",
+    @"{""operation"": ""select"", ""table"": ""users"", ""where"": {""age"": ""28""}, ""limit"": 10}");
+// 更新
+await agent.ExecuteToolAsync("sqlite_database",
+    @"{""operation"": ""update"", ""table"": ""users"", ""set"": {""age"": ""29""}, ""where"": {""name"": ""张三""}}");
+// 自定义 SQL
+await agent.ExecuteToolAsync("sqlite_database",
+    @"{""operation"": ""execute_sql"", ""sql"": ""SELECT * FROM users ORDER BY age DESC""}");
+```
+
 ## 当前实现的功能
 
 - ✅ 基础消息模型（Message, MessageRole, ToolCall）
@@ -221,9 +273,11 @@ await agent.ExecuteToolAsync("database_query",
 - ✅ OpenAI API 兼容接口（支持 DeepSeek、通义千问等）
 - ✅ 流式响应（`ChatStreamAsync` / `StreamCompleteAsync`）
 - ✅ 自动工具调用判断（`ChatAsync` LLM 驱动循环）
-- ✅ 文件操作工具（FileOperationTool）
+- ✅ 文件操作工具（FileOperationTool：读写/追加/删除/列目录/创建目录/复制/移动/文件信息）
 - ✅ 网络请求工具（WebRequestTool）
+- ✅ 网页搜索工具（WebSearchTool：DuckDuckGo 即时答案 API）
 - ✅ 数据库查询工具（DatabaseQueryTool，内存表）
+- ✅ SQLite 数据库工具（SqliteDatabaseTool：持久化、完整 CRUD、自定义 SQL）
 - ✅ 对话历史持久化（`SaveHistoryAsync` / `LoadHistoryAsync`）
 - ✅ 工具链式调用优化（支持并行工具执行）
 - ✅ 多智能体协作（AgentOrchestrator + SubAgentTool）
