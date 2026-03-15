@@ -19,4 +19,15 @@ public interface ILlmClient
         IReadOnlyList<Message> messages,
         IReadOnlyDictionary<string, ITool>? tools = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 以流式方式向 LLM 发送对话请求，逐步返回生成的文本片段。
+    /// 流式模式不支持工具调用，适合纯文本回复场景。
+    /// </summary>
+    /// <param name="messages">对话历史消息列表</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>依次生成的文本片段（token 增量）</returns>
+    IAsyncEnumerable<string> StreamCompleteAsync(
+        IReadOnlyList<Message> messages,
+        CancellationToken cancellationToken = default);
 }
