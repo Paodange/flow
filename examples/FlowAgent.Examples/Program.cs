@@ -14,63 +14,7 @@ class Program
 
         PrintHeader();
 
-        Console.WriteLine("请选择运行模式：");
-        Console.WriteLine();
-        Console.WriteLine("  [1] 交互式聊天  - 直接与大模型对话，体验工具调用（推荐）");
-        Console.WriteLine("  [2] 示例演示    - 运行5个循序渐进的功能演示");
-        Console.WriteLine("  [3] 模型配置    - 使用配置文件管理模型设置（Microsoft.Extensions.AI）");
-        Console.WriteLine();
-        Console.Write("请输入选择 (默认 1): ");
-        var choice = Console.ReadLine()?.Trim();
-
-        Console.Clear();
-        PrintHeader();
-
-        if (choice == "3")
-        {
-            // 示例7: Microsoft.Extensions.AI + 配置文件
-            await Example7_ModelSettingsAndMicrosoftAI();
-        }
-        else if (choice == "2")
-        {
-            // 示例1: 基础智能体（手动工具调用，无需 LLM API Key）
-            await Example1_BasicAgent();
-
-            Console.WriteLine("\n按任意键继续下一个示例...");
-            Console.ReadKey();
-            Console.Clear();
-
-            // 示例2: 多工具智能体
-            await Example2_MultiToolAgent();
-
-            Console.WriteLine("\n按任意键继续下一个示例...");
-            Console.ReadKey();
-            Console.Clear();
-
-            // 示例3: 对话历史管理
-            await Example3_ConversationHistory();
-
-            Console.WriteLine("\n按任意键继续下一个示例...");
-            Console.ReadKey();
-            Console.Clear();
-
-            // 示例4: LLM 驱动的智能体（自动工具调用循环）
-            await Example4_LlmDrivenAgent();
-
-            Console.WriteLine("\n按任意键继续下一个示例...");
-            Console.ReadKey();
-            Console.Clear();
-
-            // 示例5: 新功能演示（文件/数据库/Web/持久化/多智能体）
-            await Example5_NewFeatures();
-
-            Console.WriteLine("\n\n所有示例演示完成！");
-        }
-        else
-        {
-            // 默认：交互式聊天
-            await Example6_InteractiveChat();
-        }
+        await Example7_ModelSettingsAndMicrosoftAI();
     }
 
     static void PrintHeader()
@@ -763,33 +707,77 @@ class Program
         var config = new AgentConfig
         {
             Name = "AI助手（Microsoft.Extensions.AI）",
-            SystemPrompt = "你是一个有用的AI助手，擅长数学计算和文本处理。",
-            MaxIterations = 5
+            SystemPrompt = """
+                你是一个全能的AI助手，可以借助多种工具为用户提供准确的回答：
+                - calculator：执行数学计算（加减乘除）
+                - datetime：获取当前时间、日期加减计算
+                - text_process：文本处理（大小写转换、长度统计、单词计数等）
+
+                遇到相关问题时，请主动调用对应工具来获取准确结果，而不是凭记忆回答。
+                """,
+            MaxIterations = 10,
+            LlmMaxRetries = 3,
+            LlmRetryDelayMs = 500
         };
         var agent = new Agent(config, llmClient);
+
+        Console.WriteLine("📦 正在注册工具...");
         agent.RegisterTool(new CalculatorTool());
         agent.RegisterTool(new DateTimeTool());
         agent.RegisterTool(new TextProcessTool());
 
+        // ── 欢迎界面 ──────────────────────────────────────────────────────────
         Console.WriteLine();
-        Console.WriteLine("📝 开始对话（Microsoft.Extensions.AI 驱动）：");
+        PrintSectionTitle("💬 交互式智能体聊天已启动！");
+        Console.WriteLine("  输入你的问题或指令，智能体会自动调用合适的工具。");
+        Console.WriteLine("  示例问题：");
+        Console.WriteLine("    • 计算 256 乘以 48");
+        Console.WriteLine("    • 今天是星期几？再过 100 天是哪天？");
+        Console.WriteLine("    • 帮我把 'hello flowagent' 转成大写");
+        Console.WriteLine();
+        Console.WriteLine("  内置命令：");
+        Console.WriteLine("    /help    - 显示帮助信息");
+        Console.WriteLine("    /tools   - 列出所有可用工具");
+        Console.WriteLine("    /clear   - 清空对话历史，开始新对话");
+        Console.WriteLine("    /history - 查看对话历史摘要");
+        Console.WriteLine("    /save    - 保存对话历史到文件");
+        Console.WriteLine("    /exit    - 退出聊天");
+        Console.WriteLine();
+        Console.WriteLine($"💡 提示：可编辑配置文件切换 AI 提供商：{settingsPath}");
+        Console.WriteLine("─".PadRight(60, '─'));
         Console.WriteLine();
 
-        var questions = new[]
-        {
-            "请帮我计算 256 乘以 48 等于多少？",
-            "今天是几月几日？",
-        };
+        var tmpDir = Path.Combine(Path.GetTempPath(), "flowagent_chat");
+        Directory.CreateDirectory(tmpDir);
 
-        foreach (var question in questions)
+        // ── 交互主循环 ────────────────────────────────────────────────────────
+        while (true)
         {
-            Console.WriteLine($"👤 用户: {question}");
+            Console.Write("👤 你: ");
+            var input = Console.ReadLine()?.Trim();
+
+            if (string.IsNullOrEmpty(input))
+                continue;
+
+            // 处理内置命令
+            if (input.StartsWith('/'))
+            {
+                var shouldExit = await HandleInteractiveCommand(input, agent, tmpDir);
+                if (shouldExit) return;
+                continue;
+            }
+
+            // 发送消息给 LLM，LLM 自主决定是否调用工具
             Console.WriteLine();
-
             try
             {
-                var reply = await agent.ChatAsync(question);
+                var reply = await agent.ChatAsync(input);
+                Console.WriteLine();
                 Console.WriteLine($"🤖 助手: {reply}");
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine("操作已取消。");
             }
             catch (Exception ex)
             {
@@ -800,17 +788,5 @@ class Program
             Console.WriteLine("─".PadRight(60, '─'));
             Console.WriteLine();
         }
-
-        Console.WriteLine("✅ 示例7完成！");
-        Console.WriteLine();
-        Console.WriteLine("💡 提示：可以编辑配置文件切换不同的 AI 提供商：");
-        Console.WriteLine($"   {settingsPath}");
-        Console.WriteLine();
-        Console.WriteLine("   支持的 provider 值（区分大小写）:");
-        Console.WriteLine("     \"OpenAI\"      - OpenAI 或兼容接口（DeepSeek、通义千问、Ollama 等）");
-        Console.WriteLine("     \"AzureOpenAI\" - Azure OpenAI 服务");
-        Console.WriteLine();
-        Console.WriteLine("   使用 Ollama: provider=\"OpenAI\", endpoint=\"http://localhost:11434/v1\", apiKey=\"ollama\"");
-        Console.WriteLine("   使用 DeepSeek: endpoint=\"https://api.deepseek.com/v1\", modelId=\"deepseek-chat\"");
     }
 }

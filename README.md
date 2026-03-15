@@ -87,16 +87,7 @@ dotnet build
 dotnet run --project examples/FlowAgent.Examples/FlowAgent.Examples.csproj
 ```
 
-启动后会显示运行模式菜单：
-
-```
-  [1] 交互式聊天  - 直接与大模型对话，体验工具调用（推荐）
-  [2] 示例演示    - 运行5个循序渐进的功能演示
-```
-
-**模式 1（推荐）—— 交互式聊天**
-
-直接与大模型对话，大模型会自动决定调用哪些工具：
+启动后直接进入交互式聊天模式，支持通过配置文件管理模型设置（Microsoft.Extensions.AI）：
 
 ```bash
 export OPENAI_API_KEY=sk-...          # 必填
@@ -115,15 +106,6 @@ dotnet run --project examples/FlowAgent.Examples/FlowAgent.Examples.csproj
 | `/history` | 查看对话历史统计 |
 | `/save` | 保存对话历史到 JSON 文件 |
 | `/exit` | 退出聊天 |
-
-**模式 2 —— 示例演示**
-
-运行5个循序渐进的示例，演示各项核心功能：
-1. **基础智能体** - 使用计算器工具进行数学运算
-2. **多工具智能体** - 展示多个工具的协同使用
-3. **对话历史管理** - 演示多轮对话和历史记录
-4. **LLM 驱动的智能体** - 使用真实 LLM 自动工具调用（需要 API Key）
-5. **新功能演示** - 文件操作、数据库、持久化、多智能体协作
 
 ## 示例代码
 
