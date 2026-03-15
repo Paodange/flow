@@ -1,4 +1,5 @@
 using FlowAgent.Core;
+using FlowAgent.Core.Configuration;
 using FlowAgent.Core.LLM;
 using FlowAgent.Core.Models;
 using FlowAgent.Core.Tools;
@@ -17,6 +18,7 @@ class Program
         Console.WriteLine();
         Console.WriteLine("  [1] 交互式聊天  - 直接与大模型对话，体验工具调用（推荐）");
         Console.WriteLine("  [2] 示例演示    - 运行5个循序渐进的功能演示");
+        Console.WriteLine("  [3] 模型配置    - 使用配置文件管理模型设置（Microsoft.Extensions.AI）");
         Console.WriteLine();
         Console.Write("请输入选择 (默认 1): ");
         var choice = Console.ReadLine()?.Trim();
@@ -24,7 +26,12 @@ class Program
         Console.Clear();
         PrintHeader();
 
-        if (choice == "2")
+        if (choice == "3")
+        {
+            // 示例7: Microsoft.Extensions.AI + 配置文件
+            await Example7_ModelSettingsAndMicrosoftAI();
+        }
+        else if (choice == "2")
         {
             // 示例1: 基础智能体（手动工具调用，无需 LLM API Key）
             await Example1_BasicAgent();
@@ -653,5 +660,157 @@ class Program
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// 示例7: 使用 Microsoft.Extensions.AI 和模型配置文件管理 AI 客户端。
+    /// 演示如何通过 ModelSettings 配置文件灵活切换不同的 AI 模型提供商。
+    /// </summary>
+    static async Task Example7_ModelSettingsAndMicrosoftAI()
+    {
+        PrintSectionTitle("示例7: Microsoft.Extensions.AI + 模型配置文件");
+
+        // ── 配置文件路径（当前目录下的 flowagent.settings.json）──────────────
+        var settingsPath = Path.Combine(Directory.GetCurrentDirectory(), "flowagent.settings.json");
+
+        Console.WriteLine($"📄 配置文件路径: {settingsPath}");
+        Console.WriteLine();
+
+        // ── 加载或初始化配置 ──────────────────────────────────────────────────
+        ModelSettings settings;
+
+        if (File.Exists(settingsPath))
+        {
+            settings = await ModelSettingsManager.LoadAsync(settingsPath);
+            Console.WriteLine($"✅ 已从配置文件加载模型设置:");
+        }
+        else
+        {
+            // 首次运行：尝试从环境变量读取，并保存为配置文件
+            var envApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+            var envBaseUrl = Environment.GetEnvironmentVariable("OPENAI_API_BASE");
+            var envModel = Environment.GetEnvironmentVariable("OPENAI_MODEL");
+
+            settings = new ModelSettings
+            {
+                Provider = ModelProvider.OpenAI,
+                ApiKey = envApiKey,
+                Endpoint = string.IsNullOrWhiteSpace(envBaseUrl) ? null : envBaseUrl,
+                ModelId = envModel ?? "gpt-4o-mini",
+                MaxOutputTokens = 2048,
+                Temperature = 0.7
+            };
+
+            if (!string.IsNullOrWhiteSpace(settings.ApiKey))
+            {
+                await ModelSettingsManager.SaveAsync(settings, settingsPath);
+                Console.WriteLine($"✅ 已从环境变量创建配置文件:");
+            }
+            else
+            {
+                Console.WriteLine("⚠️  未找到配置文件，且未设置 OPENAI_API_KEY 环境变量。");
+                Console.WriteLine();
+                Console.Write("   请输入 API Key（留空跳过本示例）: ");
+                var inputKey = Console.ReadLine()?.Trim();
+
+                if (string.IsNullOrWhiteSpace(inputKey))
+                {
+                    Console.WriteLine("未提供 API Key，跳过本示例。");
+                    Console.WriteLine();
+                    Console.WriteLine("提示: 可手动创建 flowagent.settings.json，内容示例：");
+                    Console.WriteLine("""
+                    {
+                      "provider": "OpenAI",
+                      "apiKey": "sk-...",
+                      "endpoint": null,
+                      "modelId": "gpt-4o-mini",
+                      "maxOutputTokens": 2048,
+                      "temperature": 0.7
+                    }
+                    """);
+                    return;
+                }
+
+                settings.ApiKey = inputKey;
+                await ModelSettingsManager.SaveAsync(settings, settingsPath);
+                Console.WriteLine($"✅ 配置已保存到: {settingsPath}");
+            }
+        }
+
+        Console.WriteLine($"   提供商:   {settings.Provider}");
+        Console.WriteLine($"   模型:     {settings.ModelId}");
+        Console.WriteLine($"   Endpoint: {settings.Endpoint ?? "（默认）"}");
+        Console.WriteLine($"   最大输出: {settings.MaxOutputTokens} tokens");
+        Console.WriteLine($"   温度:     {settings.Temperature}");
+        Console.WriteLine();
+
+        // ── 使用 Microsoft.Extensions.AI 创建客户端 ──────────────────────────
+        ILlmClient llmClient;
+        try
+        {
+            llmClient = ModelSettingsManager.CreateLlmClient(settings);
+            Console.WriteLine("🤖 已通过 Microsoft.Extensions.AI 创建客户端（MicrosoftAiClient）");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ 创建客户端失败: {ex.Message}");
+            return;
+        }
+
+        using var disposableLlmClient = llmClient as IDisposable;
+
+        // ── 创建带工具的智能体 ────────────────────────────────────────────────
+        var config = new AgentConfig
+        {
+            Name = "AI助手（Microsoft.Extensions.AI）",
+            SystemPrompt = "你是一个有用的AI助手，擅长数学计算和文本处理。",
+            MaxIterations = 5
+        };
+        var agent = new Agent(config, llmClient);
+        agent.RegisterTool(new CalculatorTool());
+        agent.RegisterTool(new DateTimeTool());
+        agent.RegisterTool(new TextProcessTool());
+
+        Console.WriteLine();
+        Console.WriteLine("📝 开始对话（Microsoft.Extensions.AI 驱动）：");
+        Console.WriteLine();
+
+        var questions = new[]
+        {
+            "请帮我计算 256 乘以 48 等于多少？",
+            "今天是几月几日？",
+        };
+
+        foreach (var question in questions)
+        {
+            Console.WriteLine($"👤 用户: {question}");
+            Console.WriteLine();
+
+            try
+            {
+                var reply = await agent.ChatAsync(question);
+                Console.WriteLine($"🤖 助手: {reply}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ 错误: {ex.Message}");
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("─".PadRight(60, '─'));
+            Console.WriteLine();
+        }
+
+        Console.WriteLine("✅ 示例7完成！");
+        Console.WriteLine();
+        Console.WriteLine("💡 提示：可以编辑配置文件切换不同的 AI 提供商：");
+        Console.WriteLine($"   {settingsPath}");
+        Console.WriteLine();
+        Console.WriteLine("   支持的 provider 值（区分大小写）:");
+        Console.WriteLine("     \"OpenAI\"      - OpenAI 或兼容接口（DeepSeek、通义千问、Ollama 等）");
+        Console.WriteLine("     \"AzureOpenAI\" - Azure OpenAI 服务");
+        Console.WriteLine();
+        Console.WriteLine("   使用 Ollama: provider=\"OpenAI\", endpoint=\"http://localhost:11434/v1\", apiKey=\"ollama\"");
+        Console.WriteLine("   使用 DeepSeek: endpoint=\"https://api.deepseek.com/v1\", modelId=\"deepseek-chat\"");
     }
 }
