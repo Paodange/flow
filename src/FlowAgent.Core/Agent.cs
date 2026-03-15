@@ -87,6 +87,7 @@ public class Agent
     private readonly AgentConfig _config;
     private readonly List<Message> _conversationHistory;
     private readonly Dictionary<string, ITool> _tools;
+    private readonly HashSet<string> _disabledTools = new(StringComparer.OrdinalIgnoreCase);
     private readonly ILlmClient? _llmClient;
 
     /// <summary>
@@ -153,6 +154,61 @@ public class Agent
 
         _tools[tool.Name] = tool;
         Console.WriteLine($"✓ 已注册工具: {tool.Name} - {tool.Description}");
+    }
+
+    /// <summary>
+    /// 注销（移除）已注册的工具。若工具不存在则静默忽略。
+    /// </summary>
+    /// <param name="toolName">工具名称</param>
+    public void UnregisterTool(string toolName)
+    {
+        if (_tools.Remove(toolName))
+        {
+            _disabledTools.Remove(toolName);
+            Console.WriteLine($"✗ 已注销工具: {toolName}");
+        }
+    }
+
+    /// <summary>
+    /// 禁用指定工具（工具保留注册状态，但不会传递给 LLM）。
+    /// </summary>
+    /// <param name="toolName">工具名称</param>
+    public void DisableTool(string toolName)
+    {
+        if (!_tools.ContainsKey(toolName))
+        {
+            throw new InvalidOperationException($"工具 '{toolName}' 未注册，无法禁用");
+        }
+
+        _disabledTools.Add(toolName);
+        Console.WriteLine($"⏸️  工具已禁用: {toolName}");
+    }
+
+    /// <summary>
+    /// 启用已被禁用的工具。
+    /// </summary>
+    /// <param name="toolName">工具名称</param>
+    public void EnableTool(string toolName)
+    {
+        if (!_tools.ContainsKey(toolName))
+        {
+            throw new InvalidOperationException($"工具 '{toolName}' 未注册，无法启用");
+        }
+
+        if (_disabledTools.Remove(toolName))
+        {
+            Console.WriteLine($"▶️  工具已启用: {toolName}");
+        }
+    }
+
+    /// <summary>
+    /// 获取当前处于启用状态的工具字典（已注册且未被禁用的工具）。
+    /// </summary>
+    public IReadOnlyDictionary<string, ITool> GetActiveTools()
+    {
+        return _tools
+            .Where(kv => !_disabledTools.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => kv.Value);
     }
 
     /// <summary>
@@ -231,6 +287,10 @@ public class Agent
         summary += $"- 助手消息: {_conversationHistory.Count(m => m.Role == MessageRole.Assistant)} 条\n";
         summary += $"- 工具消息: {_conversationHistory.Count(m => m.Role == MessageRole.Tool)} 条\n";
         summary += $"已注册工具: {_tools.Count} 个";
+        if (_disabledTools.Count > 0)
+        {
+            summary += $"（其中 {_disabledTools.Count} 个已禁用）";
+        }
 
         return summary;
     }
@@ -348,7 +408,8 @@ public class Agent
         // 1. 将用户消息写入历史
         AddUserMessage(userMessage);
 
-        var tools = _config.EnableTools && _tools.Count > 0 ? _tools : null;
+        var activeTools = GetActiveTools();
+        var tools = _config.EnableTools && activeTools.Count > 0 ? activeTools : null;
 
         for (int iteration = 0; iteration < _config.MaxIterations; iteration++)
         {
