@@ -38,8 +38,9 @@ flow/
 │       ├── Agent.cs              # 智能体核心类（含持久化/重试/并行工具）
 │       └── AgentOrchestrator.cs  # 多智能体编排器
 ├── examples/
-│   └── FlowAgent.Examples/      # 示例项目
-│       └── Program.cs            # 演示程序（5个示例）
+│   ├── FlowAgent.Examples/      # 交互式聊天程序（含插件热加载支持）
+│   │   └── Program.cs            # 主程序入口
+│   └── FlowAgent.SamplePlugin/  # 示例插件（单位换算工具）
 └── docs/
     └── TUTORIAL.md               # 详细教程文档
 ```
@@ -103,7 +104,8 @@ dotnet run --project examples/FlowAgent.Examples/FlowAgent.Examples.csproj
 | 命令 | 说明 |
 |------|------|
 | `/help` | 显示帮助信息 |
-| `/tools` | 列出所有可用工具 |
+| `/tools` | 列出所有可用工具（含插件工具） |
+| `/plugins` | 查看已加载的插件列表 |
 | `/clear` | 清空对话历史，开始新对话 |
 | `/history` | 查看对话历史统计 |
 | `/save` | 保存对话历史到 JSON 文件 |
@@ -283,6 +285,7 @@ await agent.ExecuteToolAsync("sqlite_database",
 - ✅ 多智能体协作（AgentOrchestrator + SubAgentTool）
 - ✅ 错误处理和重试机制（指数退避重试策略）
 - ✅ **插件化工具系统**（`PluginManager`：自动发现、热加载/卸载、工具启用/禁用，无需重启）
+- ✅ **交互式聊天**（内置 `/tools`、`/plugins`、`/clear`、`/history`、`/save` 等命令）
 
 ## 下一步计划
 
