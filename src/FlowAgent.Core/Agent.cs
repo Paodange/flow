@@ -1,3 +1,4 @@
+using FlowAgent.Core.LLM;
 using FlowAgent.Core.Models;
 using FlowAgent.Core.Tools;
 
@@ -27,6 +28,38 @@ public class AgentConfig
     /// 是否启用工具调用
     /// </summary>
     public bool EnableTools { get; set; } = true;
+
+    // ── LLM 相关配置 ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// LLM API 密钥（例如 OpenAI sk-…）
+    /// </summary>
+    public string? LlmApiKey { get; set; }
+
+    /// <summary>
+    /// LLM 服务基础 URL，支持 OpenAI 兼容接口，默认 https://api.openai.com/v1
+    /// </summary>
+    public string LlmBaseUrl { get; set; } = "https://api.openai.com/v1";
+
+    /// <summary>
+    /// 使用的模型名称，默认 gpt-4o-mini
+    /// </summary>
+    public string LlmModel { get; set; } = "gpt-4o-mini";
+
+    /// <summary>
+    /// 最大生成 token 数，默认 2048
+    /// </summary>
+    public int LlmMaxTokens { get; set; } = 2048;
+
+    /// <summary>
+    /// 采样温度（0~2），越高越随机，默认 0.7
+    /// </summary>
+    public double LlmTemperature { get; set; } = 0.7;
+
+    /// <summary>
+    /// 智能体循环的最大迭代次数（防止工具调用死循环），默认 10
+    /// </summary>
+    public int MaxIterations { get; set; } = 10;
 }
 
 /// <summary>
@@ -37,6 +70,7 @@ public class Agent
     private readonly AgentConfig _config;
     private readonly List<Message> _conversationHistory;
     private readonly Dictionary<string, ITool> _tools;
+    private readonly ILlmClient? _llmClient;
 
     /// <summary>
     /// 智能体配置
@@ -53,11 +87,35 @@ public class Agent
     /// </summary>
     public IReadOnlyDictionary<string, ITool> Tools => _tools;
 
-    public Agent(AgentConfig? config = null)
+    /// <summary>
+    /// 创建智能体
+    /// </summary>
+    /// <param name="config">智能体配置（为 null 时使用默认配置）</param>
+    /// <param name="llmClient">
+    ///   LLM 客户端实现。传入 null 时会尝试用 <see cref="AgentConfig"/> 中的 LLM 配置
+    ///   自动创建 <see cref="OpenAiClient"/>；若配置中也没有 API Key 则保持为 null，
+    ///   此时调用 <see cref="ChatAsync"/> 将抛出异常。
+    /// </param>
+    public Agent(AgentConfig? config = null, ILlmClient? llmClient = null)
     {
         _config = config ?? new AgentConfig();
         _conversationHistory = new List<Message>();
         _tools = new Dictionary<string, ITool>();
+
+        // 如果调用者没有传入 llmClient，尝试用配置自动创建
+        if (llmClient != null)
+        {
+            _llmClient = llmClient;
+        }
+        else if (!string.IsNullOrWhiteSpace(_config.LlmApiKey))
+        {
+            _llmClient = new OpenAiClient(
+                _config.LlmApiKey,
+                _config.LlmModel,
+                _config.LlmBaseUrl,
+                _config.LlmMaxTokens,
+                _config.LlmTemperature);
+        }
 
         // 添加系统消息
         if (!string.IsNullOrEmpty(_config.SystemPrompt))
@@ -158,5 +216,90 @@ public class Agent
         summary += $"已注册工具: {_tools.Count} 个";
 
         return summary;
+    }
+
+    /// <summary>
+    /// 向智能体发送一条用户消息，并通过 LLM 驱动完整的 推理→工具调用→回复 循环。
+    /// </summary>
+    /// <remarks>
+    /// 工作流程：
+    /// <list type="number">
+    ///   <item>将用户消息加入对话历史</item>
+    ///   <item>调用 LLM，传递当前对话历史与可用工具列表</item>
+    ///   <item>若 LLM 返回工具调用请求，则依次执行工具，将结果写入历史，然后再次调用 LLM</item>
+    ///   <item>重复步骤 2-3，直到 LLM 返回最终文本回复，或达到最大迭代次数</item>
+    ///   <item>将最终回复写入历史并返回</item>
+    /// </list>
+    /// </remarks>
+    /// <param name="userMessage">用户输入的消息</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>智能体的最终文本回复</returns>
+    /// <exception cref="InvalidOperationException">未配置 LLM 客户端时抛出</exception>
+    public async Task<string> ChatAsync(string userMessage, CancellationToken cancellationToken = default)
+    {
+        if (_llmClient == null)
+        {
+            throw new InvalidOperationException(
+                "未配置 LLM 客户端。请在 AgentConfig 中设置 LlmApiKey，或在构造 Agent 时传入 ILlmClient 实例。");
+        }
+
+        // 1. 将用户消息写入历史
+        AddUserMessage(userMessage);
+
+        var tools = _config.EnableTools && _tools.Count > 0 ? _tools : null;
+
+        for (int iteration = 0; iteration < _config.MaxIterations; iteration++)
+        {
+            // 2. 调用 LLM
+            Console.WriteLine($"🤖 调用 LLM（第 {iteration + 1} 次迭代）...");
+            var llmResponse = await _llmClient.CompleteAsync(_conversationHistory, tools, cancellationToken);
+
+            if (llmResponse.HasToolCalls)
+            {
+                // 3a. LLM 请求调用工具：先把 assistant 的工具调用消息写入历史
+                var assistantMessage = new Message(MessageRole.Assistant, llmResponse.Content ?? string.Empty)
+                {
+                    ToolCalls = llmResponse.ToolCalls
+                };
+                _conversationHistory.Add(assistantMessage);
+
+                // 3b. 逐一执行工具，把结果写入历史
+                foreach (var toolCall in llmResponse.ToolCalls!)
+                {
+                    Console.WriteLine($"🔧 LLM 请求调用工具: {toolCall.Name}");
+                    Console.WriteLine($"   参数: {toolCall.Arguments}");
+
+                    string toolResult;
+                    if (_tools.TryGetValue(toolCall.Name, out var tool))
+                    {
+                        toolResult = await tool.ExecuteAsync(toolCall.Arguments, cancellationToken);
+                    }
+                    else
+                    {
+                        toolResult = $"错误: 未找到工具 '{toolCall.Name}'";
+                    }
+
+                    Console.WriteLine($"   结果: {toolResult}");
+
+                    _conversationHistory.Add(new Message(MessageRole.Tool, toolResult)
+                    {
+                        ToolCallId = toolCall.Id
+                    });
+                }
+
+                // 3c. 继续循环，让 LLM 看到工具结果后再做决策
+                continue;
+            }
+
+            // 4. LLM 返回了最终文本回复
+            var reply = llmResponse.Content ?? string.Empty;
+            _conversationHistory.Add(new Message(MessageRole.Assistant, reply));
+            return reply;
+        }
+
+        // 超出最大迭代次数，返回错误信息
+        var fallback = $"[智能体达到最大迭代次数 {_config.MaxIterations}，未能获得最终回复]";
+        _conversationHistory.Add(new Message(MessageRole.Assistant, fallback));
+        return fallback;
     }
 }
