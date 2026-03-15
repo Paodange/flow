@@ -30,12 +30,19 @@ flow/
 │       │   ├── WebRequestTool.cs    # 网络请求工具
 │       │   ├── WebSearchTool.cs     # 网页搜索工具（DuckDuckGo）
 │       │   ├── DatabaseQueryTool.cs # 内存数据库工具
-│       │   └── SqliteDatabaseTool.cs# SQLite 数据库工具（持久化）
+│       │   ├── SqliteDatabaseTool.cs# SQLite 数据库工具（持久化）
+│       │   ├── JsonProcessTool.cs   # JSON 处理工具（格式化/查询/设置/验证）
+│       │   └── EnvironmentTool.cs   # 环境与系统信息工具
+│       ├── Skills/               # 技能系统
+│       │   ├── ISkill.cs         # 技能接口
+│       │   ├── SkillBase.cs      # 技能抽象基类
+│       │   └── WebResearchSkill.cs  # 示例技能：多轮网络调研
 │       ├── LLM/                  # LLM 集成
 │       │   ├── ILlmClient.cs     # LLM 客户端接口（含流式）
 │       │   ├── LlmResponse.cs    # LLM 响应模型
 │       │   └── OpenAiClient.cs   # OpenAI 兼容客户端
-│       ├── Agent.cs              # 智能体核心类（含持久化/重试/并行工具）
+│       ├── Agent.cs              # 智能体核心类（含持久化/重试/并行工具/技能支持）
+│       ├── SkillToolAdapter.cs   # 内部适配器：将技能包装为工具
 │       └── AgentOrchestrator.cs  # 多智能体编排器
 ├── examples/
 │   ├── FlowAgent.Examples/      # 交互式聊天程序（含插件热加载支持）
@@ -260,6 +267,39 @@ await agent.ExecuteToolAsync("sqlite_database",
     @"{""operation"": ""execute_sql"", ""sql"": ""SELECT * FROM users ORDER BY age DESC""}");
 ```
 
+### 🔧 JsonProcessTool（JSON 处理）
+解析、格式化、查询和修改 JSON 数据，支持路径表达式
+
+```csharp
+// 格式化美化
+await agent.ExecuteToolAsync("json_process",
+    @"{""operation"": ""format"", ""json"": ""{\"\"name\"\":\"\"Alice\"\"}""}");
+// 按路径读取字段（支持嵌套路径和数组索引）
+await agent.ExecuteToolAsync("json_process",
+    @"{""operation"": ""get"", ""json"": ""{...}"", ""path"": ""user.address.city""}");
+// 验证 JSON 合法性
+await agent.ExecuteToolAsync("json_process",
+    @"{""operation"": ""validate"", ""json"": ""{...}""}");
+// 转换为可读表格（数组 → 表格，对象 → 键值对列表）
+await agent.ExecuteToolAsync("json_process",
+    @"{""operation"": ""to_table"", ""json"": ""[{...}]""}");
+```
+
+### 🖥️ EnvironmentTool（环境与系统信息）
+读取环境变量、获取操作系统信息和当前工作目录
+
+```csharp
+// 获取指定环境变量
+await agent.ExecuteToolAsync("environment",
+    @"{""action"": ""get_env"", ""name"": ""PATH""}");
+// 获取系统信息（OS、CPU、.NET 运行时版本等）
+await agent.ExecuteToolAsync("environment",
+    @"{""action"": ""system_info""}");
+// 获取当前工作目录
+await agent.ExecuteToolAsync("environment",
+    @"{""action"": ""current_dir""}");
+```
+
 ## 当前实现的功能
 
 - ✅ 基础消息模型（Message, MessageRole, ToolCall）
@@ -280,12 +320,15 @@ await agent.ExecuteToolAsync("sqlite_database",
 - ✅ 网页搜索工具（WebSearchTool：DuckDuckGo 即时答案 API）
 - ✅ 数据库查询工具（DatabaseQueryTool，内存表）
 - ✅ SQLite 数据库工具（SqliteDatabaseTool：持久化、完整 CRUD、自定义 SQL）
+- ✅ JSON 处理工具（JsonProcessTool：格式化/压缩/路径读写/验证/转表格）
+- ✅ 环境与系统信息工具（EnvironmentTool：环境变量/系统信息/主机名）
 - ✅ 对话历史持久化（`SaveHistoryAsync` / `LoadHistoryAsync`）
 - ✅ 工具链式调用优化（支持并行工具执行）
 - ✅ 多智能体协作（AgentOrchestrator + SubAgentTool）
 - ✅ 错误处理和重试机制（指数退避重试策略）
 - ✅ **插件化工具系统**（`PluginManager`：自动发现、热加载/卸载、工具启用/禁用，无需重启）
 - ✅ **交互式聊天**（内置 `/tools`、`/plugins`、`/clear`、`/history`、`/save` 等命令）
+- ✅ **技能系统**（`ISkill` + `SkillBase`：多步骤复合能力，可编排工具调用）
 
 ## 下一步计划
 
@@ -435,6 +478,77 @@ public class MyCustomTool : ITool
 ```
 
 查看 [docs/TUTORIAL.md](docs/TUTORIAL.md) 了解更多细节。
+
+### 🧠 技能系统（Skills）
+
+技能是比工具更高级的复合能力，可以内部编排多个工具调用来完成复杂的多步骤任务。技能通过 `ISkill` 接口定义，并以工具的形式暴露给 LLM。
+
+#### 工具 vs 技能
+
+| 特性 | 工具（Tool） | 技能（Skill） |
+|------|-------------|--------------|
+| 粒度 | 原子操作 | 多步骤复合任务 |
+| 工具访问 | 无 | 可调用其他工具 |
+| 复杂度 | 简单 | 复杂流程 |
+| 暴露给 LLM | ✅ | ✅（自动包装为工具） |
+
+#### 使用内置技能
+
+```csharp
+using FlowAgent.Core.Skills;
+
+// 注册技能（同时也会作为工具暴露给 LLM）
+agent.RegisterSkill(new WebResearchSkill());
+
+// 技能会自动访问当前激活的工具，无需额外配置
+// LLM 可以调用 "web_research" 来触发多轮搜索并汇总报告
+
+// 注销技能
+agent.UnregisterSkill("web_research");
+
+// 查看已注册的技能
+var skills = agent.Skills;
+```
+
+#### 开发自定义技能
+
+继承 `SkillBase` 并实现多步骤逻辑：
+
+```csharp
+using FlowAgent.Core.Skills;
+
+public class DataAnalysisSkill : SkillBase
+{
+    public override string Name => "data_analysis";
+    public override string Description => "从数据库查询数据并进行统计分析";
+
+    public override string ParametersSchema => @"{
+        ""type"": ""object"",
+        ""properties"": {
+            ""table"": { ""type"": ""string"", ""description"": ""要分析的数据表名"" }
+        },
+        ""required"": [""table""]
+    }";
+
+    public override async Task<string> ExecuteAsync(
+        string arguments,
+        IReadOnlyDictionary<string, ITool> tools,
+        CancellationToken cancellationToken = default)
+    {
+        // 检查依赖工具是否可用
+        var missing = CheckRequiredTools(tools, "sqlite_database");
+        if (missing.Count > 0)
+            return $"缺少必要工具: {string.Join(", ", missing)}";
+
+        // 调用工具（使用辅助方法 InvokeToolAsync）
+        var queryResult = await InvokeToolAsync(tools, "sqlite_database",
+            $@"{{""operation"": ""select"", ""table"": ""{table}""}}", cancellationToken);
+
+        // 处理结果并返回分析报告
+        return $"分析结果:\n{queryResult}";
+    }
+}
+```
 
 ## 学习目标
 

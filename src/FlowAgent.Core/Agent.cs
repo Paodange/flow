@@ -1,5 +1,6 @@
 using FlowAgent.Core.LLM;
 using FlowAgent.Core.Models;
+using FlowAgent.Core.Skills;
 using FlowAgent.Core.Tools;
 
 namespace FlowAgent.Core;
@@ -88,6 +89,7 @@ public class Agent
     private readonly List<Message> _conversationHistory;
     private readonly Dictionary<string, ITool> _tools;
     private readonly HashSet<string> _disabledTools = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ISkill> _skills = new(StringComparer.OrdinalIgnoreCase);
     private readonly ILlmClient? _llmClient;
 
     /// <summary>
@@ -104,6 +106,11 @@ public class Agent
     /// 已注册的工具
     /// </summary>
     public IReadOnlyDictionary<string, ITool> Tools => _tools;
+
+    /// <summary>
+    /// 已注册的技能
+    /// </summary>
+    public IReadOnlyDictionary<string, ISkill> Skills => _skills;
 
     /// <summary>
     /// 创建智能体
@@ -211,6 +218,42 @@ public class Agent
             .ToDictionary(kv => kv.Key, kv => kv.Value);
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // 技能管理
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 注册技能。技能会以工具的形式暴露给 LLM，并在执行时获得对当前激活工具的访问权限。
+    /// </summary>
+    /// <param name="skill">要注册的技能实例</param>
+    /// <exception cref="InvalidOperationException">名称与已注册的工具或技能重复时抛出</exception>
+    public void RegisterSkill(ISkill skill)
+    {
+        if (_tools.ContainsKey(skill.Name))
+        {
+            throw new InvalidOperationException($"工具或技能 '{skill.Name}' 已经注册");
+        }
+
+        _skills[skill.Name] = skill;
+        // 通过适配器将技能暴露为工具，LLM 可通过工具调用触发技能
+        _tools[skill.Name] = new SkillToolAdapter(skill, this);
+        Console.WriteLine($"✓ 已注册技能: {skill.Name} - {skill.Description}");
+    }
+
+    /// <summary>
+    /// 注销（移除）已注册的技能。若技能不存在则静默忽略。
+    /// </summary>
+    /// <param name="skillName">技能名称</param>
+    public void UnregisterSkill(string skillName)
+    {
+        if (_skills.Remove(skillName))
+        {
+            _tools.Remove(skillName);
+            _disabledTools.Remove(skillName);
+            Console.WriteLine($"✗ 已注销技能: {skillName}");
+        }
+    }
+
     /// <summary>
     /// 添加用户消息到对话历史
     /// </summary>
@@ -286,10 +329,17 @@ public class Agent
         summary += $"- 用户消息: {_conversationHistory.Count(m => m.Role == MessageRole.User)} 条\n";
         summary += $"- 助手消息: {_conversationHistory.Count(m => m.Role == MessageRole.Assistant)} 条\n";
         summary += $"- 工具消息: {_conversationHistory.Count(m => m.Role == MessageRole.Tool)} 条\n";
-        summary += $"已注册工具: {_tools.Count} 个";
+
+        var nonSkillToolCount = _tools.Count - _skills.Count;
+        summary += $"已注册工具: {nonSkillToolCount} 个";
         if (_disabledTools.Count > 0)
         {
             summary += $"（其中 {_disabledTools.Count} 个已禁用）";
+        }
+
+        if (_skills.Count > 0)
+        {
+            summary += $"\n已注册技能: {_skills.Count} 个";
         }
 
         return summary;

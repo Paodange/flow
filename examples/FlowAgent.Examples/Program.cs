@@ -1,6 +1,7 @@
 using FlowAgent.Core;
 using FlowAgent.Core.Configuration;
 using FlowAgent.Core.Plugins;
+using FlowAgent.Core.Skills;
 using FlowAgent.Core.Tools;
 
 namespace FlowAgent.Examples;
@@ -119,7 +120,7 @@ class Program
         {
             Name = "FlowAgent 助手",
             SystemPrompt = """
-                你是一个全能的 AI 助手，可以借助多种工具为用户提供准确的回答：
+                你是一个全能的 AI 助手，可以借助多种工具和技能为用户提供准确的回答：
                 - calculator：执行数学计算（加减乘除）
                 - datetime：获取当前时间、日期加减计算
                 - text_process：文本处理（大小写转换、长度统计、单词计数等）
@@ -129,6 +130,9 @@ class Program
                 - web_search：使用 DuckDuckGo 搜索网络内容
                 - database_query：操作内存数据库（创建表、插入、查询数据）
                 - sqlite_database：操作 SQLite 数据库（支持持久化、完整 CRUD 和自定义 SQL）
+                - json_process：处理 JSON 数据（格式化、查询、设置字段值等）
+                - environment：获取系统环境信息（环境变量、系统信息、主机名等）
+                - web_research：【技能】对指定主题进行多轮网络调研并汇总报告
                 - 插件工具：通过插件系统动态加载的额外工具（可在运行时热加载）
 
                 遇到相关问题时，请主动调用对应工具来获取准确结果，而不是凭记忆回答。
@@ -150,7 +154,14 @@ class Program
         agent.RegisterTool(new WebSearchTool());
         agent.RegisterTool(new DatabaseQueryTool());
         agent.RegisterTool(new SqliteDatabaseTool(Path.Combine(tmpDir, "chat.db")));
+        agent.RegisterTool(new JsonProcessTool());
+        agent.RegisterTool(new EnvironmentTool());
         Console.WriteLine($" {agent.Tools.Count} 个工具已就绪");
+
+        // ── 注册内置技能 ──────────────────────────────────────────────────────
+        Console.Write("🧠 正在注册内置技能...");
+        agent.RegisterSkill(new WebResearchSkill());
+        Console.WriteLine($" {agent.Skills.Count} 个技能已就绪");
 
         // ── 启动插件管理器 ────────────────────────────────────────────────────
         Directory.CreateDirectory(pluginDir);
@@ -190,7 +201,7 @@ class Program
         Console.WriteLine();
         Console.WriteLine("  内置命令：");
         Console.WriteLine("    /help    - 显示帮助信息");
-        Console.WriteLine("    /tools   - 列出所有可用工具");
+        Console.WriteLine("    /tools   - 列出所有可用工具和技能");
         Console.WriteLine("    /plugins - 查看已加载的插件");
         Console.WriteLine("    /clear   - 清空对话历史，开始新对话");
         Console.WriteLine("    /history - 查看对话历史摘要");
@@ -260,7 +271,7 @@ class Program
                 Console.WriteLine();
                 Console.WriteLine("  命令：");
                 Console.WriteLine("    /help    - 显示此帮助");
-                Console.WriteLine("    /tools   - 列出所有已注册工具及描述");
+                Console.WriteLine("    /tools   - 列出所有已注册工具及技能");
                 Console.WriteLine("    /plugins - 查看已加载的插件列表");
                 Console.WriteLine("    /clear   - 清空对话历史，开始全新对话");
                 Console.WriteLine("    /history - 查看当前对话的历史统计");
@@ -279,8 +290,22 @@ class Program
                 var activeTools = agent.GetActiveTools();
                 foreach (var tool in agent.Tools.Values)
                 {
+                    // 跳过技能（技能单独显示）
+                    if (agent.Skills.ContainsKey(tool.Name))
+                        continue;
                     var status = activeTools.ContainsKey(tool.Name) ? "✅" : "⏸️ ";
                     Console.WriteLine($"  {status} {tool.Name,-22} {tool.Description}");
+                }
+                if (agent.Skills.Count > 0)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("  🧠 已注册技能：");
+                    Console.WriteLine("  " + "─".PadRight(58, '─'));
+                    foreach (var skill in agent.Skills.Values)
+                    {
+                        var status = activeTools.ContainsKey(skill.Name) ? "✅" : "⏸️ ";
+                        Console.WriteLine($"  {status} {skill.Name,-22} {skill.Description}");
+                    }
                 }
                 Console.WriteLine();
                 break;
