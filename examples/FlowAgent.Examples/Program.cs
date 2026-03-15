@@ -37,6 +37,13 @@ class Program
         // 示例4: LLM 驱动的智能体（自动工具调用循环）
         await Example4_LlmDrivenAgent();
 
+        Console.WriteLine("\n按任意键继续下一个示例...");
+        Console.ReadKey();
+        Console.Clear();
+
+        // 示例5: 新功能演示（文件/数据库/Web/持久化/多智能体）
+        await Example5_NewFeatures();
+
         Console.WriteLine("\n\n所有示例演示完成！");
     }
 
@@ -247,7 +254,7 @@ class Program
         var model = Environment.GetEnvironmentVariable("OPENAI_MODEL") ?? "gpt-4o-mini";
 
         Console.WriteLine($"🔑 使用模型: {model}");
-        Console.WriteLine($"�� API 地址: {baseUrl}");
+        Console.WriteLine($"🌐 API 地址: {baseUrl}");
         Console.WriteLine();
 
         // 创建 LLM 客户端
@@ -261,7 +268,9 @@ class Program
         {
             Name = "全能助手",
             SystemPrompt = "你是一个有用的AI助手，擅长数学计算和文本处理。遇到计算问题时请使用 calculator 工具；遇到日期时间问题时请使用 datetime 工具；遇到文本处理问题时请使用 text_process 工具。",
-            MaxIterations = 5
+            MaxIterations = 5,
+            LlmMaxRetries = 3,
+            LlmRetryDelayMs = 500
         };
         var agent = new Agent(config, llmClient);
         agent.RegisterTool(new CalculatorTool());
@@ -300,5 +309,127 @@ class Program
 
         Console.WriteLine("📊 对话历史统计:");
         Console.WriteLine(agent.GetHistorySummary());
+    }
+
+    /// <summary>
+    /// 示例5: 演示所有新功能 - 文件操作、数据库、Web请求、对话持久化、多智能体协作
+    /// </summary>
+    static async Task Example5_NewFeatures()
+    {
+        PrintSectionTitle("示例5: 新功能演示");
+
+        // ── 5a. 文件操作工具 ─────────────────────────────────────────────────
+        Console.WriteLine("📁 5a. 文件操作工具");
+
+        var tmpDir = Path.Combine(Path.GetTempPath(), "flowagent_demo");
+        Directory.CreateDirectory(tmpDir);
+
+        var agent = new Agent(new AgentConfig { Name = "文件助手" });
+        agent.RegisterTool(new FileOperationTool(tmpDir));
+
+        var writeResult = await agent.ExecuteToolAsync("file_operation",
+            $@"{{""operation"":""write"",""path"":""hello.txt"",""content"":""Hello, FlowAgent!\n这是一个文件操作示例。""}}");
+        Console.WriteLine($"   {writeResult}");
+
+        var readResult = await agent.ExecuteToolAsync("file_operation",
+            @"{""operation"":""read"",""path"":""hello.txt""}");
+        Console.WriteLine($"   {readResult}");
+
+        var listResult = await agent.ExecuteToolAsync("file_operation",
+            @"{""operation"":""list_dir"",""path"":"".""}");
+        Console.WriteLine($"   {listResult}");
+
+        Console.WriteLine();
+
+        // ── 5b. 数据库查询工具 ───────────────────────────────────────────────
+        Console.WriteLine("🗄️  5b. 内存数据库工具");
+
+        var dbAgent = new Agent(new AgentConfig { Name = "数据库助手" });
+        dbAgent.RegisterTool(new DatabaseQueryTool());
+
+        var createResult = await dbAgent.ExecuteToolAsync("database_query",
+            @"{""operation"":""create_table"",""table"":""users"",""columns"":[""name"",""age"",""city""]}");
+        Console.WriteLine($"   {createResult}");
+
+        await dbAgent.ExecuteToolAsync("database_query",
+            @"{""operation"":""insert"",""table"":""users"",""row"":{""name"":""张三"",""age"":""28"",""city"":""北京""}}");
+        await dbAgent.ExecuteToolAsync("database_query",
+            @"{""operation"":""insert"",""table"":""users"",""row"":{""name"":""李四"",""age"":""35"",""city"":""上海""}}");
+        await dbAgent.ExecuteToolAsync("database_query",
+            @"{""operation"":""insert"",""table"":""users"",""row"":{""name"":""王五"",""age"":""28"",""city"":""北京""}}");
+
+        var selectAll = await dbAgent.ExecuteToolAsync("database_query",
+            @"{""operation"":""select"",""table"":""users""}");
+        Console.WriteLine($"   {selectAll}");
+
+        var selectFiltered = await dbAgent.ExecuteToolAsync("database_query",
+            @"{""operation"":""select"",""table"":""users"",""where"":{""city"":""北京""}}");
+        Console.WriteLine($"   {selectFiltered}");
+
+        Console.WriteLine();
+
+        // ── 5c. 对话历史持久化 ───────────────────────────────────────────────
+        Console.WriteLine("💾 5c. 对话历史持久化");
+
+        var historyAgent = new Agent(new AgentConfig
+        {
+            Name = "持久化测试",
+            SystemPrompt = "你是一个测试助手。"
+        });
+        historyAgent.AddUserMessage("你好！");
+        historyAgent.AddAssistantMessage("你好！有什么可以帮你的？");
+        historyAgent.AddUserMessage("今天天气真好。");
+        historyAgent.AddAssistantMessage("是的，好天气让人心情愉快！");
+
+        var historyFile = Path.Combine(tmpDir, "history.json");
+        await historyAgent.SaveHistoryAsync(historyFile);
+
+        // 创建一个新智能体并加载历史
+        var restoredAgent = new Agent(new AgentConfig { Name = "已恢复的助手" });
+        await restoredAgent.LoadHistoryAsync(historyFile);
+        Console.WriteLine($"   加载后历史条数: {restoredAgent.ConversationHistory.Count}");
+        Console.WriteLine($"   最后一条消息: [{restoredAgent.ConversationHistory[^1].Role}] {restoredAgent.ConversationHistory[^1].Content}");
+
+        Console.WriteLine();
+
+        // ── 5d. 多智能体协作 ─────────────────────────────────────────────────
+        Console.WriteLine("🤝 5d. 多智能体协作");
+
+        var orchestrator = new AgentOrchestrator();
+
+        // 创建数学专家智能体
+        var mathAgent = new Agent(new AgentConfig
+        {
+            Name = "数学专家",
+            SystemPrompt = "你是一个数学专家，擅长数学计算。"
+        });
+        mathAgent.RegisterTool(new CalculatorTool());
+        orchestrator.RegisterAgent("math", mathAgent);
+
+        // 创建文本专家智能体
+        var textAgent = new Agent(new AgentConfig
+        {
+            Name = "文本专家",
+            SystemPrompt = "你是一个文本处理专家。"
+        });
+        textAgent.RegisterTool(new TextProcessTool());
+        orchestrator.RegisterAgent("text", textAgent);
+
+        // 创建协调智能体并为其提供 SubAgentTool
+        var coordinatorConfig = new AgentConfig
+        {
+            Name = "协调者",
+            SystemPrompt = "你是一个协调者，可以调用其他专业智能体。"
+        };
+        var coordinator = new Agent(coordinatorConfig);
+        coordinator.RegisterTool(orchestrator.CreateSubAgentTool("coordinator"));
+
+        // 手动演示子智能体工具调用
+        var mathResult = await coordinator.ExecuteToolAsync("call_agent",
+            @"{""agent_name"":""math"",""message"":""帮我计算 99 * 99""}");
+        Console.WriteLine($"   数学专家回复: {mathResult}");
+
+        Console.WriteLine();
+        Console.WriteLine("✅ 所有新功能演示完成！");
     }
 }

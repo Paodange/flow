@@ -29,6 +29,11 @@ public class AgentConfig
     /// </summary>
     public bool EnableTools { get; set; } = true;
 
+    /// <summary>
+    /// 是否并行执行同一轮中的多个工具调用（默认 false，顺序执行）
+    /// </summary>
+    public bool ParallelToolExecution { get; set; } = false;
+
     // ── LLM 相关配置 ─────────────────────────────────────────────────────────
 
     /// <summary>
@@ -60,6 +65,18 @@ public class AgentConfig
     /// 智能体循环的最大迭代次数（防止工具调用死循环），默认 10
     /// </summary>
     public int MaxIterations { get; set; } = 10;
+
+    // ── 重试策略配置 ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// LLM 调用失败时的最大重试次数（0 表示不重试），默认 3
+    /// </summary>
+    public int LlmMaxRetries { get; set; } = 3;
+
+    /// <summary>
+    /// 首次重试前的等待时间（毫秒），默认 1000ms；后续重试按指数退避递增
+    /// </summary>
+    public int LlmRetryDelayMs { get; set; } = 1000;
 }
 
 /// <summary>
@@ -218,6 +235,91 @@ public class Agent
         return summary;
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // 对话历史持久化
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 将当前对话历史序列化为 JSON 并保存到指定文件
+    /// </summary>
+    /// <param name="filePath">目标文件路径</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    public async Task SaveHistoryAsync(string filePath, CancellationToken cancellationToken = default)
+    {
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        };
+
+        var json = System.Text.Json.JsonSerializer.Serialize(_conversationHistory, options);
+        var dir = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        await File.WriteAllTextAsync(filePath, json, cancellationToken);
+        Console.WriteLine($"💾 对话历史已保存到: {filePath}（{_conversationHistory.Count} 条消息）");
+    }
+
+    /// <summary>
+    /// 从指定文件加载对话历史（会替换当前历史，但保留现有系统消息）
+    /// </summary>
+    /// <param name="filePath">源文件路径</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    public async Task LoadHistoryAsync(string filePath, CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(filePath))
+            throw new FileNotFoundException($"对话历史文件不存在: {filePath}");
+
+        var json = await File.ReadAllTextAsync(filePath, cancellationToken);
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        };
+
+        var loaded = System.Text.Json.JsonSerializer.Deserialize<List<Message>>(json, options);
+        if (loaded == null)
+            throw new InvalidOperationException("对话历史文件格式无效");
+
+        _conversationHistory.Clear();
+        _conversationHistory.AddRange(loaded);
+        Console.WriteLine($"📂 对话历史已从 '{filePath}' 加载（{loaded.Count} 条消息）");
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // LLM 调用（含重试）
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 带指数退避重试的 LLM 调用
+    /// </summary>
+    private async Task<LlmResponse> CompleteWithRetryAsync(
+        IReadOnlyDictionary<string, ITool>? tools,
+        CancellationToken cancellationToken)
+    {
+        int maxRetries = _config.LlmMaxRetries;
+        int delayMs = _config.LlmRetryDelayMs;
+
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await _llmClient!.CompleteAsync(_conversationHistory, tools, cancellationToken);
+            }
+            catch (HttpRequestException ex) when (attempt < maxRetries && !cancellationToken.IsCancellationRequested)
+            {
+                int waitMs = Math.Min(delayMs * (1 << attempt), 30_000); // 指数退避，最长 30 秒
+                Console.WriteLine($"⚠️  LLM 调用失败（第 {attempt + 1}/{maxRetries} 次重试，{waitMs}ms 后重试）: {ex.Message}");
+                await Task.Delay(waitMs, cancellationToken);
+            }
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // ChatAsync（含并行工具执行）
+    // ──────────────────────────────────────────────────────────────────────────
+
     /// <summary>
     /// 向智能体发送一条用户消息，并通过 LLM 驱动完整的 推理→工具调用→回复 循环。
     /// </summary>
@@ -226,7 +328,7 @@ public class Agent
     /// <list type="number">
     ///   <item>将用户消息加入对话历史</item>
     ///   <item>调用 LLM，传递当前对话历史与可用工具列表</item>
-    ///   <item>若 LLM 返回工具调用请求，则依次执行工具，将结果写入历史，然后再次调用 LLM</item>
+    ///   <item>若 LLM 返回工具调用请求，则执行工具（支持并行），将结果写入历史，然后再次调用 LLM</item>
     ///   <item>重复步骤 2-3，直到 LLM 返回最终文本回复，或达到最大迭代次数</item>
     ///   <item>将最终回复写入历史并返回</item>
     /// </list>
@@ -250,9 +352,9 @@ public class Agent
 
         for (int iteration = 0; iteration < _config.MaxIterations; iteration++)
         {
-            // 2. 调用 LLM
+            // 2. 调用 LLM（含重试）
             Console.WriteLine($"🤖 调用 LLM（第 {iteration + 1} 次迭代）...");
-            var llmResponse = await _llmClient.CompleteAsync(_conversationHistory, tools, cancellationToken);
+            var llmResponse = await CompleteWithRetryAsync(tools, cancellationToken);
 
             if (llmResponse.HasToolCalls)
             {
@@ -263,28 +365,14 @@ public class Agent
                 };
                 _conversationHistory.Add(assistantMessage);
 
-                // 3b. 逐一执行工具，把结果写入历史
-                foreach (var toolCall in llmResponse.ToolCalls!)
+                // 3b. 执行工具（顺序或并行）
+                if (_config.ParallelToolExecution)
                 {
-                    Console.WriteLine($"🔧 LLM 请求调用工具: {toolCall.Name}");
-                    Console.WriteLine($"   参数: {toolCall.Arguments}");
-
-                    string toolResult;
-                    if (_tools.TryGetValue(toolCall.Name, out var tool))
-                    {
-                        toolResult = await tool.ExecuteAsync(toolCall.Arguments, cancellationToken);
-                    }
-                    else
-                    {
-                        toolResult = $"错误: 未找到工具 '{toolCall.Name}'";
-                    }
-
-                    Console.WriteLine($"   结果: {toolResult}");
-
-                    _conversationHistory.Add(new Message(MessageRole.Tool, toolResult)
-                    {
-                        ToolCallId = toolCall.Id
-                    });
+                    await ExecuteToolCallsParallelAsync(llmResponse.ToolCalls!, cancellationToken);
+                }
+                else
+                {
+                    await ExecuteToolCallsSequentialAsync(llmResponse.ToolCalls!, cancellationToken);
                 }
 
                 // 3c. 继续循环，让 LLM 看到工具结果后再做决策
@@ -301,5 +389,103 @@ public class Agent
         var fallback = $"[智能体达到最大迭代次数 {_config.MaxIterations}，未能获得最终回复]";
         _conversationHistory.Add(new Message(MessageRole.Assistant, fallback));
         return fallback;
+    }
+
+    /// <summary>
+    /// 以流式方式向智能体发送消息，实时返回 LLM 生成的文本片段（不执行工具调用）。
+    /// </summary>
+    /// <param name="userMessage">用户输入的消息</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>依次生成的文本片段</returns>
+    /// <exception cref="InvalidOperationException">未配置 LLM 客户端时抛出</exception>
+    public async IAsyncEnumerable<string> ChatStreamAsync(
+        string userMessage,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (_llmClient == null)
+        {
+            throw new InvalidOperationException(
+                "未配置 LLM 客户端。请在 AgentConfig 中设置 LlmApiKey，或在构造 Agent 时传入 ILlmClient 实例。");
+        }
+
+        // 将用户消息写入历史
+        AddUserMessage(userMessage);
+
+        Console.WriteLine("🤖 开始流式 LLM 调用...");
+
+        var replyBuilder = new System.Text.StringBuilder();
+
+        await foreach (var chunk in _llmClient.StreamCompleteAsync(_conversationHistory, cancellationToken))
+        {
+            replyBuilder.Append(chunk);
+            yield return chunk;
+        }
+
+        // 将完整回复写入历史
+        var fullReply = replyBuilder.ToString();
+        _conversationHistory.Add(new Message(MessageRole.Assistant, fullReply));
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // 私有工具执行方法
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// <summary>顺序执行工具调用列表</summary>
+    private async Task ExecuteToolCallsSequentialAsync(
+        List<ToolCall> toolCalls,
+        CancellationToken cancellationToken)
+    {
+        foreach (var toolCall in toolCalls)
+        {
+            var result = await InvokeToolAsync(toolCall, cancellationToken);
+            _conversationHistory.Add(new Message(MessageRole.Tool, result)
+            {
+                ToolCallId = toolCall.Id
+            });
+        }
+    }
+
+    /// <summary>
+    /// 并行执行工具调用列表，按原始顺序将结果写入对话历史。
+    /// 注意：并行模式下各工具的副作用（如文件写入）顺序不可预期，请谨慎使用。
+    /// </summary>
+    private async Task ExecuteToolCallsParallelAsync(
+        List<ToolCall> toolCalls,
+        CancellationToken cancellationToken)
+    {
+        Console.WriteLine($"⚡ 并行执行 {toolCalls.Count} 个工具调用...");
+
+        // 并行触发所有工具
+        var tasks = toolCalls.Select(tc => InvokeToolAsync(tc, cancellationToken)).ToList();
+        var results = await Task.WhenAll(tasks);
+
+        // 按原顺序写入历史（保证 OpenAI API 对 tool_call_id 顺序的要求）
+        for (int i = 0; i < toolCalls.Count; i++)
+        {
+            _conversationHistory.Add(new Message(MessageRole.Tool, results[i])
+            {
+                ToolCallId = toolCalls[i].Id
+            });
+        }
+    }
+
+    /// <summary>执行单个工具调用并返回结果字符串</summary>
+    private async Task<string> InvokeToolAsync(ToolCall toolCall, CancellationToken cancellationToken)
+    {
+        Console.WriteLine($"🔧 LLM 请求调用工具: {toolCall.Name}");
+        Console.WriteLine($"   参数: {toolCall.Arguments}");
+
+        string toolResult;
+        if (_tools.TryGetValue(toolCall.Name, out var tool))
+        {
+            toolResult = await tool.ExecuteAsync(toolCall.Arguments, cancellationToken);
+        }
+        else
+        {
+            toolResult = $"错误: 未找到工具 '{toolCall.Name}'";
+        }
+
+        Console.WriteLine($"   结果: {toolResult}");
+        return toolResult;
     }
 }
