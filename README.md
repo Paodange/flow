@@ -87,7 +87,38 @@ dotnet build
 dotnet run --project examples/FlowAgent.Examples/FlowAgent.Examples.csproj
 ```
 
-示例程序包含五个演示：
+启动后会显示运行模式菜单：
+
+```
+  [1] 交互式聊天  - 直接与大模型对话，体验工具调用（推荐）
+  [2] 示例演示    - 运行5个循序渐进的功能演示
+```
+
+**模式 1（推荐）—— 交互式聊天**
+
+直接与大模型对话，大模型会自动决定调用哪些工具：
+
+```bash
+export OPENAI_API_KEY=sk-...          # 必填
+export OPENAI_API_BASE=https://...    # 可选，支持 DeepSeek / 通义千问等
+export OPENAI_MODEL=gpt-4o-mini       # 可选，默认 gpt-4o-mini
+dotnet run --project examples/FlowAgent.Examples/FlowAgent.Examples.csproj
+```
+
+启动后可直接提问，也支持以下内置命令：
+
+| 命令 | 说明 |
+|------|------|
+| `/help` | 显示帮助信息 |
+| `/tools` | 列出所有可用工具 |
+| `/clear` | 清空对话历史，开始新对话 |
+| `/history` | 查看对话历史统计 |
+| `/save` | 保存对话历史到 JSON 文件 |
+| `/exit` | 退出聊天 |
+
+**模式 2 —— 示例演示**
+
+运行5个循序渐进的示例，演示各项核心功能：
 1. **基础智能体** - 使用计算器工具进行数学运算
 2. **多工具智能体** - 展示多个工具的协同使用
 3. **对话历史管理** - 演示多轮对话和历史记录
