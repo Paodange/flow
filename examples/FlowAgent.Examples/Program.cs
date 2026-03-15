@@ -305,6 +305,19 @@ class Program
             @"{""operation"":""read"",""path"":""hello.txt""}");
         Console.WriteLine($"   {readResult}");
 
+        // mkdir + copy + move + info
+        var mkdirResult = await agent.ExecuteToolAsync("file_operation",
+            @"{""operation"":""mkdir"",""path"":""subdir""}");
+        Console.WriteLine($"   {mkdirResult}");
+
+        var copyResult = await agent.ExecuteToolAsync("file_operation",
+            @"{""operation"":""copy"",""path"":""hello.txt"",""destination"":""subdir/hello_copy.txt""}");
+        Console.WriteLine($"   {copyResult}");
+
+        var infoResult = await agent.ExecuteToolAsync("file_operation",
+            @"{""operation"":""info"",""path"":""hello.txt""}");
+        Console.WriteLine($"   {infoResult}");
+
         var listResult = await agent.ExecuteToolAsync("file_operation",
             @"{""operation"":""list_dir"",""path"":"".""}");
         Console.WriteLine($"   {listResult}");
@@ -335,6 +348,40 @@ class Program
         var selectFiltered = await dbAgent.ExecuteToolAsync("database_query",
             @"{""operation"":""select"",""table"":""users"",""where"":{""city"":""北京""}}");
         Console.WriteLine($"   {selectFiltered}");
+
+        Console.WriteLine();
+
+        // ── 5b2. SQLite 数据库工具 ────────────────────────────────────────────
+        Console.WriteLine("🗄️  5b2. SQLite 数据库工具（持久化）");
+
+        var dbFile = Path.Combine(tmpDir, "demo.db");
+        var sqliteAgent = new Agent(new AgentConfig { Name = "SQLite助手" });
+        sqliteAgent.RegisterTool(new SqliteDatabaseTool(dbFile));
+
+        var sqlCreateResult = await sqliteAgent.ExecuteToolAsync("sqlite_database",
+            @"{""operation"":""create_table"",""table"":""products"",""columns"":[{""name"":""id"",""type"":""INTEGER PRIMARY KEY AUTOINCREMENT""},{""name"":""name"",""type"":""TEXT""},{""name"":""price"",""type"":""REAL""},{""name"":""stock"",""type"":""INTEGER""}]}");
+        Console.WriteLine($"   {sqlCreateResult}");
+
+        await sqliteAgent.ExecuteToolAsync("sqlite_database",
+            @"{""operation"":""insert"",""table"":""products"",""row"":{""name"":""苹果"",""price"":""3.5"",""stock"":""100""}}");
+        await sqliteAgent.ExecuteToolAsync("sqlite_database",
+            @"{""operation"":""insert"",""table"":""products"",""row"":{""name"":""香蕉"",""price"":""2.0"",""stock"":""200""}}");
+        await sqliteAgent.ExecuteToolAsync("sqlite_database",
+            @"{""operation"":""insert"",""table"":""products"",""row"":{""name"":""橙子"",""price"":""4.5"",""stock"":""80""}}");
+
+        var sqlSelectAll = await sqliteAgent.ExecuteToolAsync("sqlite_database",
+            @"{""operation"":""select"",""table"":""products""}");
+        Console.WriteLine($"   {sqlSelectAll}");
+
+        // 更新价格
+        var sqlUpdateResult = await sqliteAgent.ExecuteToolAsync("sqlite_database",
+            @"{""operation"":""update"",""table"":""products"",""set"":{""price"":""5.0""},""where"":{""name"":""苹果""}}");
+        Console.WriteLine($"   {sqlUpdateResult}");
+
+        // 自定义 SQL 查询
+        var sqlCustomResult = await sqliteAgent.ExecuteToolAsync("sqlite_database",
+            @"{""operation"":""execute_sql"",""sql"":""SELECT name, price FROM products ORDER BY price DESC""}");
+        Console.WriteLine($"   {sqlCustomResult}");
 
         Console.WriteLine();
 
@@ -455,9 +502,11 @@ class Program
                 - datetime：获取当前时间、日期加减计算
                 - text_process：文本处理（大小写转换、长度统计、单词计数等）
                 - random：生成随机数或从列表中随机选择
-                - file_operation：读写文件、列出目录内容（文件存储在临时目录下）
+                - file_operation：读写文件、创建目录、复制移动文件（文件存储在临时目录下）
                 - web_request：发送 HTTP GET/POST 请求
+                - web_search：使用 DuckDuckGo 搜索网络内容
                 - database_query：操作内存数据库（创建表、插入、查询数据）
+                - sqlite_database：操作 SQLite 数据库（支持持久化、完整 CRUD 和自定义 SQL）
 
                 遇到相关问题时，请主动调用对应工具来获取准确结果，而不是凭记忆回答。
                 """,
@@ -475,7 +524,9 @@ class Program
         agent.RegisterTool(new RandomTool());
         agent.RegisterTool(new FileOperationTool(tmpDir));
         agent.RegisterTool(new WebRequestTool());
+        agent.RegisterTool(new WebSearchTool());
         agent.RegisterTool(new DatabaseQueryTool());
+        agent.RegisterTool(new SqliteDatabaseTool(Path.Combine(tmpDir, "chat.db")));
 
         // ── 欢迎界面 ──────────────────────────────────────────────────────────
         Console.WriteLine();
@@ -487,6 +538,7 @@ class Program
         Console.WriteLine("    • 帮我把 'hello flowagent' 转成大写");
         Console.WriteLine("    • 从苹果、香蕉、草莓中随机选一个");
         Console.WriteLine("    • 把这段话写入文件 notes.txt：FlowAgent 真好用");
+        Console.WriteLine("    • 搜索一下 .NET 10 的新特性");
         Console.WriteLine();
         Console.WriteLine("  内置命令：");
         Console.WriteLine("    /help    - 显示帮助信息");

@@ -30,8 +30,8 @@ public class FileOperationTool : ITool
         ""properties"": {
             ""operation"": {
                 ""type"": ""string"",
-                ""enum"": [""read"", ""write"", ""append"", ""delete"", ""list_dir"", ""exists""],
-                ""description"": ""操作类型：read-读取文件，write-写入文件，append-追加内容，delete-删除文件，list_dir-列出目录，exists-检查存在""
+                ""enum"": [""read"", ""write"", ""append"", ""delete"", ""list_dir"", ""exists"", ""mkdir"", ""move"", ""copy"", ""info""],
+                ""description"": ""操作类型：read-读取文件，write-写入文件，append-追加内容，delete-删除文件，list_dir-列出目录，exists-检查存在，mkdir-创建目录，move-移动/重命名，copy-复制文件，info-文件信息""
             },
             ""path"": {
                 ""type"": ""string"",
@@ -40,6 +40,10 @@ public class FileOperationTool : ITool
             ""content"": {
                 ""type"": ""string"",
                 ""description"": ""写入或追加的内容（write/append 操作时使用）""
+            },
+            ""destination"": {
+                ""type"": ""string"",
+                ""description"": ""目标路径（move/copy 操作时使用）""
             }
         },
         ""required"": [""operation"", ""path""]
@@ -58,6 +62,15 @@ public class FileOperationTool : ITool
             if (fullPath == null)
                 return $"错误: 路径 '{args.Path}' 超出允许的根目录范围";
 
+            // Resolve destination path for move/copy operations
+            string? destPath = null;
+            if (!string.IsNullOrEmpty(args.Destination))
+            {
+                destPath = ResolveSafePath(args.Destination);
+                if (destPath == null)
+                    return $"错误: 目标路径 '{args.Destination}' 超出允许的根目录范围";
+            }
+
             return args.Operation switch
             {
                 "read" => await ReadFileAsync(fullPath, cancellationToken),
@@ -66,6 +79,10 @@ public class FileOperationTool : ITool
                 "delete" => DeleteFile(fullPath),
                 "list_dir" => ListDirectory(fullPath),
                 "exists" => CheckExists(fullPath),
+                "mkdir" => CreateDirectory(fullPath),
+                "move" => destPath != null ? MoveFileOrDirectory(fullPath, destPath) : "错误: move 操作需要提供 destination 参数",
+                "copy" => destPath != null ? CopyFile(fullPath, destPath) : "错误: copy 操作需要提供 destination 参数",
+                "info" => GetFileInfo(fullPath),
                 _ => $"错误: 不支持的操作 '{args.Operation}'"
             };
         }
@@ -163,10 +180,89 @@ public class FileOperationTool : ITool
         return $"不存在: '{path}'";
     }
 
+    private static string CreateDirectory(string path)
+    {
+        if (Directory.Exists(path))
+            return $"目录已存在: '{path}'";
+
+        Directory.CreateDirectory(path);
+        return $"已成功创建目录: {path}";
+    }
+
+    private static string MoveFileOrDirectory(string source, string destination)
+    {
+        if (File.Exists(source))
+        {
+            if (File.Exists(destination))
+                return $"错误: 目标文件已存在 '{destination}'";
+
+            var destDir = Path.GetDirectoryName(destination);
+            if (!string.IsNullOrEmpty(destDir))
+                Directory.CreateDirectory(destDir);
+            File.Move(source, destination, overwrite: false);
+            return $"已成功移动文件: {source} → {destination}";
+        }
+
+        if (Directory.Exists(source))
+        {
+            if (Directory.Exists(destination))
+                return $"错误: 目标目录已存在 '{destination}'";
+
+            Directory.Move(source, destination);
+            return $"已成功移动目录: {source} → {destination}";
+        }
+
+        return $"错误: 源路径 '{source}' 不存在";
+    }
+
+    private static string CopyFile(string source, string destination)
+    {
+        if (!File.Exists(source))
+            return $"错误: 文件 '{source}' 不存在";
+
+        if (File.Exists(destination))
+            return $"错误: 目标文件已存在 '{destination}'";
+
+        var destDir = Path.GetDirectoryName(destination);
+        if (!string.IsNullOrEmpty(destDir))
+            Directory.CreateDirectory(destDir);
+
+        File.Copy(source, destination, overwrite: false);
+        return $"已成功复制文件: {source} → {destination}";
+    }
+
+    private static string GetFileInfo(string path)
+    {
+        if (File.Exists(path))
+        {
+            var info = new FileInfo(path);
+            return $"文件信息 '{path}':\n" +
+                   $"  大小: {info.Length} 字节\n" +
+                   $"  创建时间: {info.CreationTime:yyyy-MM-dd HH:mm:ss}\n" +
+                   $"  最后修改: {info.LastWriteTime:yyyy-MM-dd HH:mm:ss}\n" +
+                   $"  只读: {info.IsReadOnly}";
+        }
+
+        if (Directory.Exists(path))
+        {
+            var info = new DirectoryInfo(path);
+            var fileCount = info.GetFiles().Length;
+            var dirCount = info.GetDirectories().Length;
+            return $"目录信息 '{path}':\n" +
+                   $"  文件数: {fileCount}\n" +
+                   $"  子目录数: {dirCount}\n" +
+                   $"  创建时间: {info.CreationTime:yyyy-MM-dd HH:mm:ss}\n" +
+                   $"  最后修改: {info.LastWriteTime:yyyy-MM-dd HH:mm:ss}";
+        }
+
+        return $"不存在: '{path}'";
+    }
+
     private class FileArgs
     {
         public string Operation { get; set; } = string.Empty;
         public string Path { get; set; } = string.Empty;
         public string? Content { get; set; }
+        public string? Destination { get; set; }
     }
 }
